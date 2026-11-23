@@ -166,11 +166,11 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
 
   const likes = post.like_count ?? 0
   const commentCount = post.comment_count ?? 0
-  const canAttemptLike = authenticated || (kind === 'post' && requireAuth)
+  const canPromptForEngagement = kind === 'post' && !!requireAuth
   return (
     <>
       <div className="post-actions">
-        {canAttemptLike ? <button className={authenticated && post.liked_by_me ? 'active' : ''}
+        {(authenticated || canPromptForEngagement) ? <button className={authenticated && post.liked_by_me ? 'active' : ''}
           onClick={authenticated ? toggleLike : (event) => requireAuth(toggleLike, event.currentTarget)}
           aria-pressed={authenticated ? !!post.liked_by_me : undefined} aria-haspopup={authenticated ? undefined : 'dialog'}
           aria-label={authenticated ? undefined : `Like post (${likes} ${likes === 1 ? 'like' : 'likes'})`}
@@ -185,7 +185,11 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
         {(authenticated || kind === 'post') && <button className={commentsOpen ? 'active-soft' : ''} onClick={openComments} disabled={busy} aria-haspopup="dialog" title="Comments">
           <ChatCircle size={16} /> {commentCount} <span className="sr-only">{commentCount === 1 ? 'comment' : 'comments'}</span>
         </button>}
-        {authenticated && <button onClick={share} title="Share"><ShareFat size={16} /> {notice || 'Share'}</button>}
+        {(authenticated || canPromptForEngagement) && <button title="Share"
+          onClick={authenticated ? share : (event) => requireAuth(share, event.currentTarget)}
+          aria-haspopup={authenticated ? undefined : 'dialog'}>
+          <ShareFat size={16} /> {notice || 'Share'}
+        </button>}
         {authenticated && kind === 'paper' && (
           <button className={post.saved_by_me ? 'active' : ''} onClick={toggleSave} aria-pressed={!!post.saved_by_me} disabled={busy} title={post.saved_by_me ? 'Remove from saved papers' : 'Save to your reading list'}>
             <BookmarkSimple size={16} weight={post.saved_by_me ? 'fill' : 'regular'} /> {post.saved_by_me ? 'Saved' : 'Save'}
@@ -277,11 +281,16 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
             ))}
           </div>
           {error && <p className="field-error comments-sheet-error" role="alert">{error}</p>}
-          {authenticated && <form className="comments-sheet-form" onSubmit={addComment}>
+          {authenticated ? <form className="comments-sheet-form" onSubmit={addComment}>
             <label className="sr-only" htmlFor={`comment-${kind}-${post.id}`}>Add a comment</label>
             <input id={`comment-${kind}-${post.id}`} maxLength={2000} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Add a comment…" autoComplete="off" />
             <button disabled={busy || !comments || !!commentsError || !draft.trim()}>Post</button>
-          </form>}
+          </form> : canPromptForEngagement && <footer className="comments-sheet-form">
+            <button type="button" className="btn btn-ghost btn-block" aria-haspopup="dialog"
+              onClick={(event) => requireAuth(() => addComment(event), event.currentTarget)}>
+              Write a comment
+            </button>
+          </footer>}
         </Overlay>
       )}
       {reportOpen && (

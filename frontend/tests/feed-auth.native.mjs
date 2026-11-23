@@ -13,12 +13,14 @@ function installTestApi() {
   const paper = { id: 42, type: 'paper', title: 'Published fixture paper', abstract: 'Fixture abstract', author_name: 'Fixture Author', created_at: now }
   const comment = (body) => ({ id: 1, body, author_name: 'Fixture Commenter', created_at: now })
   window.qa = {
-    calls: [], publicFeedBlocked: true, commentBody: 'New comment snapshot',
+    calls: [], shares: [], copiedLinks: [], publicFeedBlocked: true, commentBody: 'New comment snapshot',
     verificationUnavailable: new URLSearchParams(location.search).has('retry'),
     hold: (key) => holds.set(key, true),
     pending: (key) => pending.has(key),
     release: (key) => { pending.get(key)?.(); pending.delete(key) },
   }
+  Object.defineProperty(navigator, 'share', { configurable: true, value: async (data) => window.qa.shares.push(data) })
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (url) => window.qa.copiedLinks.push(url) } })
   const respond = (key, data, status = 200) => {
     const response = status === 204 ? new Response(null, { status }) : Response.json(data, { status })
     if (!holds.delete(key)) return Promise.resolve(response)
@@ -73,6 +75,10 @@ const text = (value) => 'document.body.innerText.includes(' + JSON.stringify(val
 test('SNARP guest, feed and auth regressions with an isolated browser API fixture', { timeout: 90000 }, async () => withChrome(async ({ input, evaluate }) => {
   const visible = (query) => waitFor(evaluate, '!!' + selector(query))
   const click = (query) => evaluate(selector(query) + '.click()')
+  const pressKey = async (key) => {
+    await input('Input.dispatchKeyEvent', { type: 'keyDown', key })
+    await input('Input.dispatchKeyEvent', { type: 'keyUp', key })
+  }
   const fill = (query, value) => evaluate('((element, value) => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value").set.call(element, value); element.dispatchEvent(new Event("input", { bubbles: true })); })(' + selector(query) + ',' + JSON.stringify(value) + ')')
   const delayResponse = (key) => evaluate('window.qa.hold(' + JSON.stringify(key) + ')')
   const pending = (key) => waitFor(evaluate, 'window.qa.pending(' + JSON.stringify(key) + ')')
@@ -100,6 +106,7 @@ test('SNARP guest, feed and auth regressions with an isolated browser API fixtur
   await release('guest-page-2')
   await visible('#paper-42')
   assert.equal(await evaluate('document.querySelectorAll("#paper-42").length'), 1)
+  assert.equal(await evaluate('!!document.querySelector("#paper-42 .post-actions button")'), false)
   await evaluate('[...document.querySelectorAll(".feed-kinds button")].find(button => button.textContent === "Posts").click()')
   await visible('#post-42')
   await evaluate('window.qa.commentBody = "Stale comment snapshot"')
@@ -112,8 +119,33 @@ test('SNARP guest, feed and auth regressions with an isolated browser API fixtur
   await waitFor(evaluate, text('Current comment snapshot'))
   await release('comments')
   assert.equal(await evaluate(text('Stale comment snapshot')), false)
-  assert.equal(await evaluate('!!document.querySelector(".comments-sheet-form")'), false)
+  assert.equal(await evaluate('!!document.querySelector("form.comments-sheet-form")'), false)
+
+  const prompt = '.login-prompt [role=dialog]'
+  const writeComment = '.comments-sheet footer button'
+  const sharePost = '#post-42 button[title=Share]'
+  assert.equal(await evaluate(`!!${selector(prompt)}`), false)
+  await click(writeComment)
+  await visible(`${prompt}[aria-modal=true]`)
+  assert.equal(await evaluate(`document.getElementById(${selector(prompt)}.getAttribute('aria-labelledby')).textContent`), 'Join the conversation')
+  assert.equal(await evaluate('document.activeElement.textContent'), 'Log In')
+  assert.equal(await evaluate('document.querySelector(".comments-sheet").inert'), true)
+  await evaluate(selector('.login-prompt a[href^="/signup"]') + '.focus()')
+  await pressKey('Tab')
+  assert.equal(await evaluate('document.activeElement.getAttribute("aria-label")'), 'Close login prompt')
+  await pressKey('Escape')
+  await waitFor(evaluate, `!${selector(prompt)}`)
+  assert.equal(await evaluate(`document.activeElement === ${selector(writeComment)}`), true)
+  assert.equal(await evaluate(text('Current comment snapshot')), true)
   await click('button[aria-label="Close comments"]')
+
+  await click(sharePost)
+  await visible(prompt)
+  await input('Input.dispatchMouseEvent', { type: 'mousePressed', x: 4, y: 4, button: 'left', clickCount: 1 })
+  await input('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 4, y: 4, button: 'left', clickCount: 1 })
+  await waitFor(evaluate, `!${selector(prompt)}`)
+  assert.equal(await evaluate(`document.activeElement === ${selector(sharePost)}`), true)
+  assert.deepEqual(await evaluate('[window.qa.shares, window.qa.copiedLinks]'), [[], []])
 
   for (const [width, height] of [[1280, 800], [768, 1024], [390, 844]]) {
     await viewport(width, height)
@@ -173,6 +205,13 @@ test('SNARP guest, feed and auth regressions with an isolated browser API fixtur
   await click('.comments-sheet-form button')
   await waitFor(evaluate, text('Member fixture comment'))
   await click('button[aria-label="Close comments"]')
+  await click(sharePost)
+  const shareUrl = new URL('/users/20?post=42#post-42', site).href
+  assert.deepEqual(await evaluate('window.qa.shares'), [{ title: 'SNARP post', text: 'Public fixture post', url: shareUrl }])
+  await evaluate('Object.defineProperty(navigator, "share", { value: undefined })')
+  await click(sharePost)
+  await waitFor(evaluate, text('Link copied'))
+  assert.deepEqual(await evaluate('window.qa.copiedLinks'), [shareUrl])
   await fill('#post-body', 'Member fixture post')
   await delayResponse('post')
   await click('.composer button[type=submit]')
