@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, Link, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   Rss, FilmReel, Books, FileText, Graph, Trophy, FolderOpen, Handshake, ChatTeardropText, ChatsCircle, Bell, GearSix, UsersThree,
@@ -15,7 +15,7 @@ import logo from './assets/logo.png'
 
 // Main navigation
 const MAIN_NAV = [
-  { to: '/', label: 'Feed', icon: Rss, end: true },
+  { to: '/', label: 'Feed', icon: Rss, end: true, also: ['/feed'] },
   { to: '/reels', label: 'Reels', icon: FilmReel },
   { to: '/articles', label: 'Papers', icon: Books, also: ['/saved', '/my-submissions'] },
   { to: '/docs', label: 'Docs', icon: FileText },
@@ -148,6 +148,24 @@ function SideProfile({ user, onNavigate, onChanged }) {
       </div>
       {panel && <PeoplePopover user={user} tab={panel} onTab={setPanel} onClose={closePanel} onNavigate={onNavigate} onChanged={onChanged} />}
     </section>
+  )
+}
+
+export function GuestLayout() {
+  useApplyTheme()
+
+  return (
+    <div className="shell guest-shell">
+      <header className="topbar">
+        <Link to="/" aria-label="SNARP home"><img src={logo} alt="UptoSkills" className="sidebar-logo" /></Link>
+        <nav className="topbar-actions" aria-label="Main">
+          <NavLink to="/feed" className="btn btn-ghost" end>Browse Posts</NavLink>
+          <Link to="/login?next=%2Ffeed" className="btn btn-ghost">Log In</Link>
+          <Link to="/signup?next=%2Ffeed" className="btn btn-ghost">Sign Up</Link>
+        </nav>
+      </header>
+      <div className="content"><Outlet /></div>
+    </div>
   )
 }
 
@@ -305,7 +323,7 @@ export default function Layout({ user, onLogout }) {
 
         {/* Page content */}
         <div className="content">
-          <Outlet />
+          <Suspense fallback={<div className="panel empty" role="status">Loading page…</div>}><Outlet /></Suspense>
         </div>
       </div>
 

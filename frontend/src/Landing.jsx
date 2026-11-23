@@ -544,9 +544,10 @@ export default function Landing() {
                 Post updates, publish peer-reviewed papers and grow with communities of students and researchers.
               </p>
               <div className="hero-ctas">
-                <Link to="/signup" className="btn btn-primary l-btn-xl magnetic">
-                  Create account <Icon icon={ArrowRight02Icon} size={20} />
+                <Link to="/feed" className="btn btn-primary l-btn-xl magnetic">
+                  Browse Posts <Icon icon={ArrowRight02Icon} size={20} />
                 </Link>
+                <Link to="/signup" className="btn btn-ghost l-btn-xl">Create account</Link>
                 <Link to="/login" className="btn btn-ghost l-btn-xl">Log in</Link>
               </div>
               <div className="hero-visual" data-speed="0.88">

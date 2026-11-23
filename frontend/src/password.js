@@ -49,5 +49,13 @@ export function passwordStrength(value, context = {}) {
 }
 
 export function safeNext(value) {
-  return typeof value === 'string' && /^\/(?![/\\])/.test(value) && !/^\/(login|signup)\b/.test(value) ? value : '/'
+  if (typeof value !== 'string' || !/^\/(?![/\\])/.test(value)) return '/'
+  const base = 'https://snarp.invalid'
+  try {
+    const target = new URL(value, base)
+    if (target.origin !== base || target.pathname.startsWith('//') || /^\/(login|signup)(\/|$)/i.test(target.pathname)) return '/'
+    return target.pathname + target.search + target.hash
+  } catch {
+    return '/'
+  }
 }

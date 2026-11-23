@@ -14,15 +14,10 @@ import Auth from './Auth'
 import VerifyEmail from './VerifyEmail'
 import ResetPassword from './ResetPassword'
 import { safeNext } from './password'
-import Layout from './Layout'
+import Layout, { GuestLayout } from './Layout'
 import Feed from './Feed'
-import Reels from './Reels'
-import CitationNetwork from './CitationNetwork'
-import Leaderboard from './Leaderboard'
 import { Saved as Collections } from './Saved'
-import ResearcherMatching from './ResearcherMatching'
 import { ChatProvider } from './ChatContext'
-import ChatPage from './pages/ChatPage'
 
 import {
   Communities,
@@ -47,6 +42,11 @@ import { AccessDenied, ModeratorDashboard } from './pages/admin'
 
 const DocsHome = lazy(() => import('./docs/DocsHome'))
 const DocsEditor = lazy(() => import('./docs/DocsEditor'))
+const Reels = lazy(() => import('./Reels'))
+const CitationNetwork = lazy(() => import('./CitationNetwork'))
+const Leaderboard = lazy(() => import('./Leaderboard'))
+const ResearcherMatching = lazy(() => import('./ResearcherMatching'))
+const ChatPage = lazy(() => import('./pages/ChatPage'))
 const docsFallback = <div className="page"><div className="panel empty" aria-busy="true">Loading Docs…</div></div>
 
 function GuestOnly({ user, children }) {
@@ -55,8 +55,8 @@ function GuestOnly({ user, children }) {
 }
 
 function RedirectToLogin() {
-  const { pathname, search } = useLocation()
-  const target = `${pathname}${search}`
+  const { pathname, search, hash } = useLocation()
+  const target = `${pathname}${search}${hash}`
   return <Navigate to={target === '/' ? '/login' : `/login?next=${encodeURIComponent(target)}`} replace />
 }
 
@@ -80,18 +80,22 @@ function SiteApp() {
 
   useEffect(() => {
     if (!getToken()) return
+    const controller = new AbortController()
+    const { signal } = controller
 
-    api('/auth/me')
-      .then(setUser)
+    api('/auth/me', { signal })
+      .then((restored) => { if (!signal.aborted) setUser(restored) })
       .catch((err) => {
+        if (signal.aborted) return
         clearTheme()
         if (err.status === 401 || err.code === 'account_blocked') {
           clearToken()
         }
       })
       .finally(() => {
-        setChecking(false)
+        if (!signal.aborted) setChecking(false)
       })
+    return () => controller.abort()
   }, [])
 
   const onAuth = useCallback(({ token, user }, remember = true) => {
@@ -99,12 +103,8 @@ function SiteApp() {
     setUser(user)
   }, [])
 
-  const logout = async () => {
-    try {
-      await api('/auth/logout', { method: 'POST' })
-    } catch {
-    }
-
+  const logout = () => {
+    if (getToken()) api('/auth/logout', { method: 'POST' }).catch(() => {})
     clearToken()
     setUser(null)
   }
@@ -139,6 +139,7 @@ function SiteApp() {
               path="/"
               element={<Feed user={user} onLogout={logout} />}
             />
+            <Route path="/feed" element={<Feed user={user} onLogout={logout} />} />
 
             <Route path="/reels" element={<Reels user={user} />} />
             <Route path="/docs" element={<Suspense fallback={docsFallback}><DocsHome user={user} /></Suspense>} />
@@ -190,14 +191,12 @@ function SiteApp() {
             <Route path="/users/:id" element={<UserProfile user={user} onLogout={logout} />} />
           </Route>
         ) : (
-          <Route
-            path="/"
-            element={
-              <Suspense fallback={null}>
-                <Landing />
-              </Suspense>
-            }
-          />
+          <>
+            <Route path="/" element={<Suspense fallback={null}><Landing /></Suspense>} />
+            <Route element={<GuestLayout />}>
+              <Route path="/feed" element={<Feed user={null} />} />
+            </Route>
+          </>
         )}
 
         <Route

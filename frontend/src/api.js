@@ -11,7 +11,10 @@ export const getToken = () => (isAdminArea()
   : localStorage.getItem('token') || sessionStorage.getItem('token'))
 
 export function saveToken(token, remember) {
-  ;(remember ? localStorage : sessionStorage).setItem('token', token)
+  const selected = remember ? localStorage : sessionStorage
+  const previous = remember ? sessionStorage : localStorage
+  selected.setItem('token', token)
+  previous.removeItem('token')
 }
 
 export function clearToken() {
@@ -19,11 +22,12 @@ export function clearToken() {
   sessionStorage.removeItem('token')
 }
 
-export async function api(path, { method = 'GET', body, headers = {} } = {}) {
-  const token = getToken()
+export async function api(path, { method = 'GET', body, headers = {}, authenticated = true, signal } = {}) {
+  const token = authenticated ? getToken() : null
   const isForm = body instanceof FormData
   const res = await fetch(`/api${path}`, {
     method,
+    signal,
     headers: {
       ...headers,
       ...(!isForm && { 'Content-Type': 'application/json' }),
@@ -31,8 +35,10 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
     },
     body: isForm ? body : body && JSON.stringify(body),
   })
+  signal?.throwIfAborted()
   if (res.status === 204) return null
   const data = await res.json().catch(() => null)
+  signal?.throwIfAborted()
   if (!res.ok) {
     const err = new Error(data?.error || data?.message || 'Could not reach the server. Is the backend running?')
     err.status = res.status
@@ -40,9 +46,10 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
     err.code = data?.code
     err.data = data
     err.userMessageId = data?.userMessageId
-    if (isAdminArea() && (res.status === 401 || data?.code === 'account_blocked') && token) {
+    const currentSession = !token || token === getToken()
+    if (currentSession && isAdminArea() && (res.status === 401 || data?.code === 'account_blocked') && token) {
       window.dispatchEvent(new Event('snarp:desk-signed-out'))
-    } else if (data?.code === 'account_blocked') {
+    } else if (currentSession && data?.code === 'account_blocked') {
       window.dispatchEvent(new Event('snarp:account-blocked'))
     }
     throw err

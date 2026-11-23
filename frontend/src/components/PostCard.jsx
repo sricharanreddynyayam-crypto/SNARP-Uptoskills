@@ -27,12 +27,15 @@ const KINDS = {
   },
 }
 
-export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpdate, onLogout, children }) {
+export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpdate, onLogout, requireAuth, children }) {
   const endpoints = KINDS[kind]
+  const authenticated = viewerId != null
   const [commentsOpen, setCommentsOpen] = useState(false)
   const [comments, setComments] = useState(null)
+  const [commentsError, setCommentsError] = useState('')
   const [scrollEnd, setScrollEnd] = useState(0)
   const listRef = useRef(null)
+  const commentsRequest = useRef(null)
   const [draft, setDraft] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
   const [reportReason, setReportReason] = useState('')
@@ -43,18 +46,37 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
   const [busy, setBusy] = useState(false)
 
   const handleError = (err) => {
-    if (err.status === 401 && onLogout) onLogout()
+    if (authenticated && err.status === 401 && onLogout) onLogout()
     else setError(err.message)
   }
 
   const openComments = async () => {
+    commentsRequest.current?.abort()
+    const controller = new AbortController()
+    commentsRequest.current = controller
+    const { signal } = controller
     setCommentsOpen(true)
     setComments(null)
+    setCommentsError('')
     setError('')
-    try { setComments(await api(`${endpoints.base(post.id)}/comments`)) }
-    catch (err) { setComments([]); handleError(err) }
+    try {
+      const list = await api(`${endpoints.base(post.id)}/comments`, { authenticated, signal })
+      if (signal.aborted) return
+      if (!Array.isArray(list)) throw new Error('The server returned invalid comments.')
+      setComments(list)
+    } catch (err) {
+      if (signal.aborted) return
+      if (authenticated && err.status === 401 && onLogout) onLogout()
+      else setCommentsError(authenticated ? err.message : 'Could not load comments. Please try again.')
+    }
   }
-  const closeComments = () => { setCommentsOpen(false); setError('') }
+  const closeComments = () => {
+    commentsRequest.current?.abort()
+    setCommentsOpen(false)
+    setError('')
+  }
+
+  useEffect(() => () => commentsRequest.current?.abort(), [])
 
   useEffect(() => {
     const list = listRef.current
@@ -62,17 +84,18 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
   }, [scrollEnd])
 
   const toggleLike = async () => {
+    if (!authenticated || busy) return
     setBusy(true)
     setError('')
     try {
-      onUpdate({ ...post, ...await api(`${endpoints.base(post.id)}/like`, { method: 'PUT', body: { liked: !post.liked_by_me } }) })
+      onUpdate({ id: post.id, ...await api(`${endpoints.base(post.id)}/like`, { method: 'PUT', body: { liked: !post.liked_by_me } }) })
     } catch (err) { handleError(err) }
     finally { setBusy(false) }
   }
 
   const addComment = async (event) => {
     event.preventDefault()
-    if (!draft.trim() || busy) return
+    if (!authenticated || !comments || commentsError || !draft.trim() || busy) return
     setBusy(true)
     setError('')
     try {
@@ -80,24 +103,29 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
       setComments((current) => [...(current ?? []), comment])
       setDraft('')
       setScrollEnd((value) => value + 1)
-      onUpdate({ ...post, comment_count: (post.comment_count ?? 0) + 1 })
+      onUpdate({ id: post.id, comment_count: (post.comment_count ?? 0) + 1 })
     } catch (err) { handleError(err) }
     finally { setBusy(false) }
   }
 
   const deleteComment = async (comment) => {
-    try {
-      await api(endpoints.comment(comment.id), { method: 'DELETE' })
-      setComments((current) => (current ?? []).filter((item) => item.id !== comment.id))
-      onUpdate({ ...post, comment_count: Math.max(0, (post.comment_count ?? 1) - 1) })
-    } catch (err) { handleError(err) }
-  }
-
-  const toggleSave = async () => {
+    if (!authenticated || busy) return
     setBusy(true)
     setError('')
     try {
-      onUpdate({ ...post, ...await api(`${endpoints.base(post.id)}/save`, { method: 'PUT', body: { saved: !post.saved_by_me } }) })
+      await api(endpoints.comment(comment.id), { method: 'DELETE' })
+      setComments((current) => (current ?? []).filter((item) => item.id !== comment.id))
+      onUpdate({ id: post.id, comment_count: Math.max(0, (post.comment_count ?? 1) - 1) })
+    } catch (err) { handleError(err) }
+    finally { setBusy(false) }
+  }
+
+  const toggleSave = async () => {
+    if (!authenticated || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      onUpdate({ id: post.id, ...await api(`${endpoints.base(post.id)}/save`, { method: 'PUT', body: { saved: !post.saved_by_me } }) })
     } catch (err) { handleError(err) }
     finally { setBusy(false) }
   }
@@ -125,6 +153,7 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
 
   const report = async (event) => {
     event.preventDefault()
+    if (!authenticated || busy) return
     setBusy(true)
     setError('')
     try {
@@ -137,28 +166,33 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
 
   const likes = post.like_count ?? 0
   const commentCount = post.comment_count ?? 0
+  const canAttemptLike = authenticated || (kind === 'post' && requireAuth)
   return (
     <>
       <div className="post-actions">
-        <button className={post.liked_by_me ? 'active' : ''} onClick={toggleLike} aria-pressed={!!post.liked_by_me} disabled={busy} title={post.liked_by_me ? 'Unlike' : 'Like'}>
-          <ThumbsUp size={16} weight={post.liked_by_me ? 'fill' : 'regular'} /> {likes} <span className="sr-only">{likes === 1 ? 'like' : 'likes'}</span>
-        </button>
-        {kind === 'post' && likes > 0 && (
+        {canAttemptLike ? <button className={authenticated && post.liked_by_me ? 'active' : ''}
+          onClick={authenticated ? toggleLike : (event) => requireAuth(toggleLike, event.currentTarget)}
+          aria-pressed={authenticated ? !!post.liked_by_me : undefined} aria-haspopup={authenticated ? undefined : 'dialog'}
+          aria-label={authenticated ? undefined : `Like post (${likes} ${likes === 1 ? 'like' : 'likes'})`}
+          disabled={busy} title={authenticated && post.liked_by_me ? 'Unlike' : 'Like'}>
+          <ThumbsUp size={16} weight={authenticated && post.liked_by_me ? 'fill' : 'regular'} /> {likes} <span className="sr-only">{likes === 1 ? 'like' : 'likes'}</span>
+        </button> : <span className="post-views"><ThumbsUp size={16} /> {likes} <span className="sr-only">{likes === 1 ? 'like' : 'likes'}</span></span>}
+        {authenticated && kind === 'post' && likes > 0 && (
           <button className={likers ? 'active-soft' : ''} onClick={openLikers} aria-haspopup="dialog" title="See who liked this">
             <UsersThree size={16} /> <span className="sr-only">See who liked this</span>
           </button>
         )}
-        <button className={commentsOpen ? 'active-soft' : ''} onClick={openComments} aria-haspopup="dialog" title="Comments">
+        {(authenticated || kind === 'post') && <button className={commentsOpen ? 'active-soft' : ''} onClick={openComments} disabled={busy} aria-haspopup="dialog" title="Comments">
           <ChatCircle size={16} /> {commentCount} <span className="sr-only">{commentCount === 1 ? 'comment' : 'comments'}</span>
-        </button>
-        <button onClick={share} title="Share"><ShareFat size={16} /> {notice || 'Share'}</button>
-        {kind === 'paper' && (
+        </button>}
+        {authenticated && <button onClick={share} title="Share"><ShareFat size={16} /> {notice || 'Share'}</button>}
+        {authenticated && kind === 'paper' && (
           <button className={post.saved_by_me ? 'active' : ''} onClick={toggleSave} aria-pressed={!!post.saved_by_me} disabled={busy} title={post.saved_by_me ? 'Remove from saved papers' : 'Save to your reading list'}>
             <BookmarkSimple size={16} weight={post.saved_by_me ? 'fill' : 'regular'} /> {post.saved_by_me ? 'Saved' : 'Save'}
           </button>
         )}
-        {children}
-        {kind === 'post' && String(post.user_id) !== String(viewerId) && (
+        {authenticated && children}
+        {authenticated && kind === 'post' && String(post.user_id) !== String(viewerId) && (
           <button className="post-report" onClick={() => setReportOpen(!reportOpen)} disabled={reportSent} title="Report">
             <Flag size={16} /> {reportSent ? 'Reported' : 'Report'}
           </button>
@@ -200,45 +234,54 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
             <h2 id={`comments-title-${kind}-${post.id}`}>Comments <span>{commentCount}</span></h2>
             <button type="button" className="icon-btn" onClick={closeComments} aria-label="Close comments"><X size={18} /></button>
           </header>
-          <div className="comments-sheet-list" ref={listRef}>
+          <div className="comments-sheet-list" ref={listRef} aria-busy={comments === null && !commentsError}>
             {post.author_name && (post.body || post.title) && (
               <div className="comment-row comment-caption">
                 <Avatar name={post.author_name} src={post.author_avatar_url} size="sm" />
                 <div>
                   <p className="comment-head">
-                    <Link to={`/users/${post.user_id}`} onClick={closeComments}><strong>{post.author_name}</strong></Link>
+                    {authenticated && post.user_id != null
+                      ? <Link to={`/users/${post.user_id}`} onClick={closeComments}><strong>{post.author_name}</strong></Link>
+                      : <strong>{post.author_name}</strong>}
                     <time dateTime={post.created_at}>{timeAgo(post.created_at)}</time>
                   </p>
                   <p className="comment-caption-text">{post.title ?? post.body}</p>
                 </div>
               </div>
             )}
-            {comments === null ? (
+            {commentsError ? (
+              <div className="comments-empty">
+                <p role="alert">{commentsError}</p>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={openComments}>Retry comments</button>
+              </div>
+            ) : comments === null ? (
               [0, 1, 2].map((i) => <div className="comment-row" key={i} aria-hidden="true"><span className="avatar avatar-sm skeleton" /><span className="skeleton skeleton-line" /></div>)
             ) : comments.length === 0 ? (
-              <p className="comments-empty"><ChatCircle size={28} /> <strong>No comments yet</strong><span>Start the conversation.</span></p>
+              <p className="comments-empty"><ChatCircle size={28} /> <strong>No comments yet</strong>{authenticated && <span>Start the conversation.</span>}</p>
             ) : comments.map((comment) => (
               <div className="comment-row" key={comment.id}>
                 <Avatar name={comment.author_name} src={comment.author_avatar_url} size="sm" />
                 <div>
                   <p className="comment-head">
-                    <Link to={`/users/${comment.user_id}`} onClick={closeComments}><strong>{comment.author_name}</strong></Link>
+                    {authenticated && comment.user_id != null
+                      ? <Link to={`/users/${comment.user_id}`} onClick={closeComments}><strong>{comment.author_name}</strong></Link>
+                      : <strong>{comment.author_name}</strong>}
                     <time dateTime={comment.created_at}>{timeAgo(comment.created_at)}</time>
                   </p>
                   <p><Linkify text={comment.body} /></p>
                 </div>
-                {(String(comment.user_id) === String(viewerId) || String(post.user_id) === String(viewerId) || canModerate) && (
-                  <button className="link-danger" onClick={() => deleteComment(comment)}>{String(comment.user_id) === String(viewerId) ? 'Delete' : 'Remove'}</button>
+                {authenticated && (String(comment.user_id) === String(viewerId) || String(post.user_id) === String(viewerId) || canModerate) && (
+                  <button className="link-danger" onClick={() => deleteComment(comment)} disabled={busy}>{String(comment.user_id) === String(viewerId) ? 'Delete' : 'Remove'}</button>
                 )}
               </div>
             ))}
           </div>
           {error && <p className="field-error comments-sheet-error" role="alert">{error}</p>}
-          <form className="comments-sheet-form" onSubmit={addComment}>
+          {authenticated && <form className="comments-sheet-form" onSubmit={addComment}>
             <label className="sr-only" htmlFor={`comment-${kind}-${post.id}`}>Add a comment</label>
             <input id={`comment-${kind}-${post.id}`} maxLength={2000} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Add a comment…" autoComplete="off" />
-            <button disabled={busy || !draft.trim()}>Post</button>
-          </form>
+            <button disabled={busy || !comments || !!commentsError || !draft.trim()}>Post</button>
+          </form>}
         </Overlay>
       )}
       {reportOpen && (
@@ -255,13 +298,15 @@ export function PostActions({ post, kind = 'post', viewerId, canModerate, onUpda
   )
 }
 
-export default function PostCard({ post, viewerId, viewerRole, onUpdate, onRemove, onLogout, as: Tag = 'li' }) {
+export default function PostCard({ post, viewerId, viewerRole, onUpdate, onRemove, onLogout, requireAuth, as: Tag = 'li' }) {
   const [editing, setEditing] = useState(false)
   const [editBody, setEditBody] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState('')
-  const mine = String(post.user_id) === String(viewerId)
-  const canModerate = MODERATOR_ROLES.includes(viewerRole)
+  const authenticated = viewerId != null
+  const mine = authenticated && String(post.user_id) === String(viewerId)
+  const canModerate = authenticated && MODERATOR_ROLES.includes(viewerRole)
+  const avatar = <Avatar name={post.author_name} src={post.author_avatar_url} size="md" />
 
   const handleError = (err) => (err.status === 401 && onLogout ? onLogout() : setError(err.message))
 
@@ -283,14 +328,16 @@ export default function PostCard({ post, viewerId, viewerRole, onUpdate, onRemov
 
   return (
     <Tag id={`post-${post.id}`} className="panel post">
-      <Link to={`/users/${post.user_id}`} tabIndex={-1} aria-hidden="true">
-        <Avatar name={post.author_name} src={post.author_avatar_url} size="md" />
-      </Link>
+      {authenticated && post.user_id != null
+        ? <Link to={`/users/${post.user_id}`} tabIndex={-1} aria-hidden="true">{avatar}</Link>
+        : avatar}
       <div className="post-main">
         <div className="post-head">
           <div className="post-who">
             <span className="post-who-line">
-              <Link to={`/users/${post.user_id}`} className="post-author"><strong>{post.author_name}</strong></Link>
+              {authenticated && post.user_id != null
+                ? <Link to={`/users/${post.user_id}`} className="post-author"><strong>{post.author_name}</strong></Link>
+                : <strong className="post-author">{post.author_name}</strong>}
               {post.author_role && post.author_role !== 'user' && <span className="tag">{ROLE_LABEL[post.author_role]}</span>}
             </span>
             <time dateTime={post.created_at} title={new Date(post.created_at).toLocaleString()}>
@@ -327,7 +374,7 @@ export default function PostCard({ post, viewerId, viewerRole, onUpdate, onRemov
             loading="lazy"
           />
         )}
-        <PostActions post={post} viewerId={viewerId} canModerate={canModerate} onUpdate={onUpdate} onLogout={onLogout}>
+        <PostActions post={post} viewerId={viewerId} canModerate={canModerate} onUpdate={onUpdate} onLogout={onLogout} requireAuth={requireAuth}>
           <SaveButton itemType="post" itemId={post.id} isSaved={!!post.saved_item_id} savedFolderId={post.saved_folder_id} savedItemId={post.saved_item_id} />
         </PostActions>
       </div>

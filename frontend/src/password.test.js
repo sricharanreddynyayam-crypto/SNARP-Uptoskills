@@ -18,9 +18,13 @@ test('strength grows with length and variety', () => {
 
 test('safeNext only allows in-app paths', () => {
   assert.equal(safeNext('/articles/4?tab=x'), '/articles/4?tab=x')
+  assert.equal(safeNext('/feed?scope=everyone#post-42'), '/feed?scope=everyone#post-42')
   assert.equal(safeNext('//evil.example'), '/')
   assert.equal(safeNext('/\\evil.example'), '/')
   assert.equal(safeNext('https://evil.example'), '/')
   assert.equal(safeNext('/login'), '/')
+  assert.equal(safeNext('/x/../SIGNUP'), '/')
+  assert.equal(safeNext('/x/..//evil.example'), '/')
+  assert.equal(safeNext('/\t/evil.example'), '/')
   assert.equal(safeNext(null), '/')
 })

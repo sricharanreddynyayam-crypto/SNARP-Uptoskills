@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { api } from './api'
+import { api, getToken } from './api'
 
 // Counts a view when a post or paper card has been at least half on screen for one second.
 // Each item is sent once per page load; the server counts each person once and never the author.
@@ -10,6 +10,11 @@ let timer = 0
 function flush() {
   timer = 0
   if (!queue.length) return
+  if (!getToken()) {
+    queue.forEach((item) => sent.delete(`${item.type}-${item.id}`))
+    queue = []
+    return
+  }
   const items = queue.splice(0, 50)
   api('/views', { method: 'POST', body: { items } }).catch(() => items.forEach((item) => sent.delete(`${item.type}-${item.id}`)))
   if (queue.length) timer = setTimeout(flush, 500)
@@ -24,10 +29,10 @@ export function recordView(type, id) {
 }
 
 // Watches the cards inside `listRef` (elements with id "post-<id>" or "paper-<id>").
-export function useViewTracker(listRef, items) {
+export function useViewTracker(listRef, items, enabled = true) {
   useEffect(() => {
     const list = listRef.current
-    if (!list) return undefined
+    if (!enabled || !list) return undefined
     const pending = new Map()
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -46,5 +51,5 @@ export function useViewTracker(listRef, items) {
       observer.disconnect()
       pending.forEach((id) => clearTimeout(id))
     }
-  }, [listRef, items])
+  }, [listRef, items, enabled])
 }

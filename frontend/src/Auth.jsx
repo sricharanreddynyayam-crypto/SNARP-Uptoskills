@@ -6,6 +6,7 @@ import {
 } from '@phosphor-icons/react'
 import { api } from './api'
 import { passwordProblem, safeNext } from './password'
+import { rememberSignupReturn } from './signup-return'
 import PasswordMeter from './components/PasswordMeter'
 import logo from './assets/logo.png'
 
@@ -200,6 +201,9 @@ export default function Auth({ mode, onAuth }) {
   const [pending, setPending] = useState(null)
   const [unverified, setUnverified] = useState('')
   const formRef = useRef(null)
+  const submission = useRef(null)
+
+  useEffect(() => () => submission.current?.abort(), [])
 
   const [firstField] = useState(() => (!isSignup && form.email ? 'password' : isSignup ? 'name' : 'email'))
 
@@ -217,6 +221,7 @@ export default function Auth({ mode, onAuth }) {
 
   const submit = async (e) => {
     e.preventDefault()
+    if (submission.current) return
     const found = validate(form, isSignup)
     setErrors(found)
     setServerError('')
@@ -224,23 +229,29 @@ export default function Auth({ mode, onAuth }) {
     const firstInvalid = FIELD_ORDER.find((name) => found[name])
     if (firstInvalid) return focusField(firstInvalid)
 
+    const controller = new AbortController()
+    submission.current = controller
+    const { signal } = controller
     setSubmitting(true)
     try {
       const body = isSignup
         ? { name: form.name.trim(), email: form.email.trim(), password: form.password, role: form.role }
         : { email: form.email.trim(), password: form.password, remember: form.remember }
-      const result = await api(`/auth/${mode}`, { method: 'POST', body })
+      const result = await api(`/auth/${mode}`, { method: 'POST', body, authenticated: false, signal })
+      if (signal.aborted) return
       try {
         if (isSignup || form.remember) localStorage.setItem(LAST_EMAIL_KEY, form.email.trim().toLowerCase())
         else localStorage.removeItem(LAST_EMAIL_KEY)
       } catch {}
       if (result.verification_required) {
+        if (isSignup) rememberSignupReturn(result.email ?? body.email, next)
         setSubmitting(false)
         setPending({ email: result.email, emailSent: result.email_sent })
         return
       }
       onAuth(result, isSignup || form.remember)
     } catch (err) {
+      if (signal.aborted) return
       setSubmitting(false)
       if (err.code === 'email_unverified') {
         setUnverified(form.email.trim())
@@ -255,6 +266,8 @@ export default function Auth({ mode, onAuth }) {
           focusField('password')
         }
       }
+    } finally {
+      if (submission.current === controller) submission.current = null
     }
   }
 

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LoginPrompt browser tests</title>
+  </head>
+  <body>
+    <div id="fixture"></div>
+    <h1>LoginPrompt browser tests</h1>
+    <pre id="results" aria-live="polite">Loading browser tests…</pre>
+    <noscript>Enable JavaScript to run these browser tests.</noscript>
+    <script>
+      const results = document.getElementById('results')
+      function showError(message) {
+        results.textContent = message
+        results.dataset.status = 'error'
+      }
+
+      if (location.protocol === 'file:') {
+        showError('This test page needs Vite to load JSX. Run npm run dev from frontend/, then open ')
+        const link = document.createElement('a')
+        link.href = 'http://localhost:5173/tests/login-prompt.html'
+        link.textContent = link.href
+        results.append(link)
+      } else {
+        const timeout = setTimeout(() => showError('Browser tests did not finish within 15 seconds.'), 15000)
+        import('./login-prompt.jsx')
+          .catch((error) => showError(`Could not load or run the browser tests: ${error.message}`))
+          .finally(() => clearTimeout(timeout))
+      }
+    </script>
+  </body>
+</html>
